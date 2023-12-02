@@ -1,0 +1,40 @@
+---
+- name: kube worker join cluster
+  command: kubeadm join {{ control_plane_dns }}:6443 --token {{ kubeadm_token }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_token_ca_hash }} # --apiserver-advertise-address {{ hostvars[inventory_hostname]['ansible_host'] }} --v=5
+  throttle: 1
+  become: true
+  register: kubeadm_join_stdout
+
+- name: create .kube directory
+  file:
+    path: /home/centos/.kube
+    state: directory
+    owner: centos
+    group: centos
+    mode: 0755
+
+- name: copy admin config to centos user
+  copy:
+    src: kube-config
+    dest: /home/centos/.kube/config
+    force: true
+    owner: centos
+    group: centos
+    mode: 0600
+
+- name: add roles to nodes
+  command: kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker-{{ inventory_hostname }}
+
+- name: install Helm
+  community.general.snap:
+    name: helm
+    classic: true
+    channel: stable
+    state: present
+  become: true
+
+- name: install kube bash-completion
+  shell: kubectl completion bash | tee /etc/bash_completion.d/kubectl > /dev/null 
+  become: true
+  args:
+    creates: /etc/bash_completion.d/kubectl

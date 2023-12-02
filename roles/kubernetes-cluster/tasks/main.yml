@@ -1,0 +1,9 @@
+---
+# tasks file for roles/kubernetes-cluster
+#- debug:
+#    var: ansible_facts['interfaces']
+
+- include: firewall.yml
+- include: pkg-installs.yml
+- include: init-kubernetes.yml
+# - include: ingress.yml

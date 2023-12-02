@@ -1,0 +1,4 @@
+---
+spc_config_dir: /etc/spc
+spc_domain: spc.local
+spc_domain_external: samsungspc.com

@@ -1,0 +1,7 @@
+---
+# defaults file for roles/kubernetes-cluster
+kube_version: "1.28.2"
+bridge_interface: "ens6"
+pod_network_cidr: "192.168.0.0/22"
+service_cidr: "192.168.4.0/23"
+load_balancer_ip: "172.16.28.90"

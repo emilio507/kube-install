@@ -1,0 +1,138 @@
+---
+- name: install ingress-nginx for ingress controller
+  command: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-{{ ingress_controller_version }}/deploy/static/provider/baremetal/deploy.yaml
+  args:
+    creates: /etc/kubernetes/manifests/ingress-nginx.yaml
+  when: inventory_hostname == groups['kube-workers'][0]
+  
+- name: wait for ingress-nginx to be ready
+  command: kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s
+  args:
+    creates: /etc/kubernetes/manifests/ingress-nginx.yaml
+  register: ingress_nginx_ready
+  until: ingress_nginx_ready.rc == 0
+  retries: 10
+  delay: 10
+  when: inventory_hostname == groups['kube-workers'][0]
+  # tags: init-kubernetes
+  notify: restart kubelet
+  # ignore_errors: true
+
+- name: create patch file replica count for ingress-nginx controller 
+  copy:
+    dest: /tmp/ingress-nginx-controller-patch.yaml
+    content:
+      spec:
+        replicas: 3
+  when: inventory_hostname == groups['kube-workers'][0]
+
+- name: patch ingress-nginx controller
+  command: kubectl patch deployment ingress-nginx-controller --namespace ingress-nginx --patch-file /tmp/ingress-nginx-controller-patch.yaml
+  #command: kubectl patch deployment ingress-nginx-controller --namespace ingress-nginx --patch "$(cat /tmp/ingress-nginx-controller-patch.yaml)"
+  when: inventory_hostname == groups['kube-workers'][0]
+
+### This needs work. At this time it does run but the ingress routes do not work ###
+#- name: install metrics service helm repo
+#  kubernetes.core.helm_repository:
+#    name: metrics-server
+#    url: https://kubernetes-sigs.github.io/metrics-server/
+#  when: inventory_hostname == groups['kube-workers'][0]
+#  #command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#  #args:
+#  #  creates: /etc/kubernetes/manifests/prometheus-community-helm-repo.yaml
+#  #when: inventory_hostname == groups['kube-workers'][0]
+#  # tags: init-kubernetes
+#
+#- name: install metrics services via helm
+#  kubernetes.core.helm:
+#    name: metrics-server
+#    chart_ref: metrics-server/metrics-server
+#    release_namespace: kube-system
+#    release_name: metrics-server
+#    update_repo_cache: true
+#    values:
+#      apiService.create: true
+#      apiService.insecureSkipTLSVerify: true
+#      hostNetwork.enabled: true
+#      replicas: 3
+#      containerPort: 10150
+#      service.port: 10150
+#      args:
+#        - --cert-dir=/tmp
+#        - --kubelet-insecure-tls
+#        - --kubelet-preferred-address-types=InternalIP
+#      #--kubelet-insecure-tls
+#      #--kubelet-preferred-address-types=InternalIP
+#
+#    #set_values:
+#    #  - value: apiService.create=true
+#    #    value_type: string
+#    #  - value: apiService.enable=true
+#    #    value_type: string
+#    #  - value: apiService.groupName=metrics.k8s.io
+#    #    value_type: string
+#    #  - value: apiService.serviceName=metrics-server
+#    #    value_type: string
+#    #  - value: apiService.version=v1beta1
+#    #    value_type: string
+#    #  - value: --kubelet-insecure-tls
+#    #    value_type: string
+#    #  - value: --kubelet-preferred-address-types=InternalIP
+#    #    value_type: string
+#    #  - value: --cert-dir=/tmp
+#    #    value_type: string
+#    #  #extraArgs:
+#    #  #kubelet-insecure-tls: true
+#    #  #kubelet-preferred-address-types: InternalIP
+#    #extraContainers:
+#    #  - name: metrics-server
+#    #    image: k8s.gcr.io/metrics-server/metrics-server:v0.6.4
+#    #    command:
+#    #      - /metrics-server
+#    #      - --kubelet-insecure-tls
+#    #      - --kubelet-preferred-address-types=InternalIP
+#    #    ports:
+#    #      - name: metrics
+#    #        containerPort: 10250
+#    #        hostPort: 8443
+#    #        protocol: TCP
+#    #extraVolumes:
+#    #  - name: tmp-dir
+#    #    emptyDir: {}
+#    #volumes:
+#    #  - name: tmp-dir
+#    #    emptyDir: {}
+#  when: inventory_hostname == groups['kube-workers'][0]
+
+### This appears to work as expected but needs a service on the backend before it can be used ###
+#- name: installl ingress-controller manifest install
+#  copy:
+#    dest: /tmp/ingress-nodeport-controller.yaml
+#    content:
+#      apiVersion: v1
+#      kind: Service
+#      metadata:
+#        name: ingress-nginx-gateway
+#        namespace: ingress-nginx
+#        labels:
+#          app.kubernetes.io/name: ingress-nginx-gateway
+#          app.kubernetes.io/part-of: ingress-nginx
+#      spec:
+#        type: NodePort
+#        ports:
+#          ## Sample configuration for exposing an HTTP server.
+#          - name: http
+#            port: 10150
+#            targetPort: 10150
+#            protocol: TCP
+#            nodePort: 32150
+#        selector:
+#          app.kubernetes.io/name: ingress-nginx-gateway
+#          app.kubernetes.io/part-of: ingress-nginx
+#  when: inventory_hostname == groups['kube-workers'][0]
+#
+#- name: Install ingress gateway
+#  command: kubectl apply -f /tmp/ingress-nodeport-controller.yaml
+#  args:
+#    creates: /etc/kubernetes/manifests/ingress-nodeport-controller.yaml
+#  when: inventory_hostname == groups['kube-workers'][0]

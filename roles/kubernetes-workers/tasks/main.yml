@@ -1,0 +1,6 @@
+---
+# tasks file for roles/kubernetes-workers
+- include: firewall.yml
+- include: pkg-installs.yml
+- include: init-workers.yml
+- include: ingress.yml

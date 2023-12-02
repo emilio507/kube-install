@@ -1,0 +1,240 @@
+---
+- name: clean anything left from previous runs
+  shell: kubeadm reset -f && ipvsadm --clear
+  #&& rm -rf /etc/kubernetes && rm -rf /var/lib/etcd
+  become: true
+  # tags: init-kubernetes
+
+- name: Pause to let cleanup take place
+  pause:
+    seconds: 30
+  # tags: init-kubernetes
+
+- name: Initialize master node
+  command: kubeadm init --apiserver-advertise-address={{ hostvars[inventory_hostname]['ansible_host'] }} --apiserver-cert-extra-sans={{ hostvars[inventory_hostname]['ansible_host'] }} --node-name {{ inventory_hostname }} --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --control-plane-endpoint={{ control_plane_dns }}:6443
+  # command: kubeadm init --apiserver-advertise-address={{ hostvars[inventory_hostname]['ansible_host'] }} --apiserver-cert-extra-sans={{ hostvars[inventory_hostname]['ansible_host'] }} --node-name {{ inventory_hostname }} --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --control-plane-endpoint={{ load_balancer_ip }}:6443
+  # --token={{ kubeadm_token }} --token-ttl={{ kubeadm_token_ttl }} --v=5
+  args:
+    creates: /etc/kubernetes/admin.conf
+  register: kubeadm_init_stdout
+  # force: true
+  throttle: 1
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+  # tags: init-kubernetes
+  notify: restart kubelet
+ # ignore_errors: true
+
+- name: pause for kube initialization to finish
+  pause:
+    seconds: 30
+  when: inventory_hostname == groups['infra'][0]
+  # tags: init-kubernetes 
+
+- name: create .kube directory
+  file:
+    path: /home/centos/.kube
+    state: directory
+    owner: centos
+    group: centos
+    mode: 0755
+  become: true
+  # when: inventory_hostname == groups['infra'][0]
+  # tags: init-kubernetes
+
+- name: copy admin config to centos user
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/centos/.kube/config
+    remote_src: true
+    force: true
+    owner: centos
+    group: centos
+    mode: 0600
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+  # tags: init-kubernete
+
+- debug:
+    var: kubeadm_init_stdout.stdout_lines
+
+- name: get init data
+  set_fact:
+    kubeadm_token: "{{ kubeadm_init_stdout.stdout | regex_search('--token (.*)') | split(' ') | list }}"
+    kubeadm_token_ca_hash: "{{ kubeadm_init_stdout.stdout | regex_search('--discovery-token-ca-cert-hash (.*)') | split(' ') | list }}"
+  when: inventory_hostname == groups['infra'][0]
+
+- debug:
+    var: kubeadm_token[1]
+- debug:     
+    var: kubeadm_token_ca_hash[1]
+
+- name: install weaver cni
+  command: kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
+  args:
+    creates: /etc/cni/net.d/10-weave.conflist
+  when: inventory_hostname == groups['infra'][0]
+  register: weave_init
+
+- debug:
+    var: weave_init
+
+- name: create tmp certs dir
+  file:
+    path: /tmp/kubecerts
+    state: directory
+    owner: centos
+    group: centos
+    mode: 0755
+  become: true
+
+- name: create tmp certs dir
+  file:
+    path: /tmp/kubecerts/{{ item }}
+    state: directory
+    mode: 0755
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+  loop:
+    - pki
+    - pki/etcd
+
+- name: sync admin certs pki
+  copy:
+    src: "{{ item }}"
+    dest: /tmp/kubecerts/pki/{{ item | split('/') | last }}
+    remote_src: true
+    force: true
+    owner: centos
+    group: centos
+    mode: 0644
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+  loop:
+    - /etc/kubernetes/pki/ca.crt
+    - /etc/kubernetes/pki/ca.key
+    - /etc/kubernetes/pki/sa.key
+    - /etc/kubernetes/pki/sa.pub
+    - /etc/kubernetes/pki/front-proxy-ca.crt
+    - /etc/kubernetes/pki/front-proxy-ca.key
+  
+- name: sync etcd certs pki
+  copy:
+    src: "{{ item }}"
+    dest: /tmp/kubecerts/pki/etcd/{{ item | split('/') | last }} 
+    remote_src: true
+    force: true
+    owner: centos
+    group: centos
+    mode: 0644
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+  loop:
+    - /etc/kubernetes/pki/etcd/ca.crt
+    - /etc/kubernetes/pki/etcd/ca.key
+
+- name: sync admin config
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /tmp/kubecerts/admin.conf
+    remote_src: true
+    force: true
+    owner: centos
+    group: centos
+    mode: 0644
+  become: true
+  when: inventory_hostname == groups['infra'][0]
+
+- name: sync admin certs
+  ansible.posix.synchronize:
+    mode: pull
+    src: /tmp/kubecerts
+    dest: /tmp/
+    recursive: true
+  delegate_to: localhost
+  when: inventory_hostname == groups['infra'][0]
+
+- name: copy admin certs to nodes 2 & 3
+  ansible.posix.synchronize:
+    mode: push
+    src: /tmp/kubecerts
+    dest: /tmp/
+    recursive: true
+  delegate_to: localhost
+  when: inventory_hostname in groups['infra'][1:]
+
+- name: copy admin certs to nodes 2 & 3
+  ansible.builtin.copy:
+    src: /tmp/kubecerts/
+    dest: /etc/kubernetes/
+    remote_src: true
+    force: true
+    follow: true
+    owner: root
+    group: root
+    mode: preserve
+  become: true
+  when: inventory_hostname in groups['infra'][1:]
+
+- debug: 
+    var: hostvars[groups['infra'][0]]['kubeadm_token'][1]
+
+- debug: 
+    var: hostvars[groups['infra'][0]]['kubeadm_token_ca_hash'][1]
+
+- name: kube control-plane join cluster
+  command: kubeadm join {{ control_plane_dns }}:6443 --token {{ hostvars[groups['infra'][0]]['kubeadm_token'][1] }} --discovery-token-ca-cert-hash sha256:{{ hostvars[groups['infra'][0]]['kubeadm_token_ca_hash'][1] }} --control-plane --apiserver-advertise-address {{ hostvars[inventory_hostname]['ansible_host'] }} --v=5
+  throttle: 1
+  become: true
+  register: kubeadm_join_stdout
+  when: inventory_hostname in groups['infra'][1:]
+
+- name: pause to allow control-plane to join
+  pause:
+    seconds: 90
+  when: inventory_hostname in groups['infra'][1:]
+
+- name: copy admin config to centos user
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/centos/.kube/config
+    remote_src: true
+    force: true
+    owner: centos
+    group: centos
+    mode: 0644
+  become: true
+  when: inventory_hostname in groups['infra'][1:]
+
+#- name: add roles to nodes
+#  command: kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker-{{ inventory_hostname }}
+#  # become: true
+#  # when: inventory_hostname in groups['infra'][1:]
+#  # tags: init-kubernetes
+
+#- name: adjust taint for master node
+#  command: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+#  when: inventory_hostname == groups['infra'][2]
+#  # become: true
+#  # when: inventory_hostname in groups['infra'][1:]
+#  # tags: init-kubernetes
+
+- name: install Helm
+  community.general.snap:
+    name: helm
+    classic: true
+    channel: stable
+    state: present
+  become: true
+
+- name: install kube bash-completion
+  shell: kubectl completion bash | tee /etc/bash_completion.d/kubectl > /dev/null 
+  become: true
+  args:
+    creates: /etc/bash_completion.d/kubectl
+
+- debug: 
+    var: hostvars[groups['infra'][0]]['kubeadm_token'][1]
+
+- debug: 
+    var: hostvars[groups['infra'][0]]['kubeadm_token_ca_hash'][1]

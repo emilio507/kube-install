@@ -1,0 +1,4 @@
+---
+# vars file for roles/kubernetes-cluster
+ingress_controller_version: v1.8.2
+control_plane_dns: kube.ns73.net

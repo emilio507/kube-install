@@ -1,0 +1,14 @@
+vault.txt
+.vagrant
+hosts.retry
+/_private_*
+known_instances.txt
+todelete.txt
+*.swp
+*.pyc
+adhoc/backups/group_vars
+adhoc/backups/host_vars
+__pycache__
+inventory/local/vm/hosts
+.venv
+.vscode

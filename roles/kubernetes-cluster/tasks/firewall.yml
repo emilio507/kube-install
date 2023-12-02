@@ -1,0 +1,73 @@
+---
+- name: Install addition dependent packages
+  ansible.builtin.package:
+    name:
+      - rsync
+      # - policycoreutils-python
+    state: present
+  become: true
+
+- name: Starting and enabling firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+  become: true
+  when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Rocky'
+
+- name: Permit traffic on ports
+  ansible.posix.firewalld:
+    zone: public
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    ### Standard SSH
+    - 22/tcp
+    ### Weave CNI Network
+    - 6783-6784/udp
+    - 6783/tcp
+    ### Kubernetes Resources
+    - 6443/tcp
+    - 2379-2380/tcp
+    - 10250/tcp
+    - 10251/tcp
+    - 10252/tcp
+    - 10259/tcp
+    - 10257/tcp
+    - 30000-32767/tcp
+    - 8443/tcp
+  become: true
+  when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Rocky'
+
+- name: Permit kubernetes traffic Debian OS family
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    state: enabled
+  loop:
+    - 22
+    - 6443
+    - 2379:2380
+    - 10250:10252
+    - 30000:32767
+    - 6783
+    - 10259
+    - 10257
+    - 8443
+  become: true
+  when: ansible_facts['os_family'] == 'Debian'
+    
+
+- name: Permit kubernetes traffic Debian OS family
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: udp
+    state: enabled
+  loop:
+    - 6783:6784
+  become: true
+  when: ansible_facts['os_family'] == 'Debian'

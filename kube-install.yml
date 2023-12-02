@@ -1,0 +1,5 @@
+---
+- hosts: infra
+  roles:
+    - kubernetes-cluster
+
